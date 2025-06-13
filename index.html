@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>材料科学与工程系选题系统</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script> 
+  <!-- Font Awesome 图标库 -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css"  />
+
+  <!-- React & ReactDOM from CDN -->
+  <script crossorigin src="https://unpkg.com/react@17/umd/react.development.js"></script> 
+  <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script> 
+
+  <!-- Babel for JSX support -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script> 
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React App Script -->
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function App() {
+      const [userRole, setUserRole] = useState('guest'); // guest, student-login, admin-login, student, admin
+      const [isLoggedIn, setIsLoggedIn] = useState(false);
+      const [messageType, setMessageType] = useState('');
+      const [topics, setTopics] = useState([]); // 初始为空课题列表
+      const [newTopic, setNewTopic] = useState({
+        mentor: '',
+        title: '',
+        direction: '',
+        limit: 1,
+      });
+      const [selectedTopicId, setSelectedTopicId] = useState(null);
+      const [message, setMessage] = useState('');
+      const [showModal, setShowModal] = useState(false);
+
+      useEffect(() => {
+        const storedUserRole = localStorage.getItem('userRole');
+        const storedStudentName = localStorage.getItem('studentName');
+        const storedStudentId = localStorage.getItem('studentId');
+        const storedAdminLoggedIn = localStorage.getItem('adminLoggedIn');
+
+        if (storedUserRole === 'student' && storedStudentName && storedStudentId) {
+          setIsLoggedIn(true);
+          setUserRole('student');
+        } else if (storedUserRole === 'admin' && storedAdminLoggedIn) {
+          setIsLoggedIn(true);
+          setUserRole('admin');
+        }
+
+        const savedTopics = localStorage.getItem('topics');
+        if (savedTopics) {
+          try {
+            setTopics(JSON.parse(savedTopics));
+          } catch (e) {
+            setTopics([]);
+          }
+        }
+      }, []);
+
+      const handleLogout = () => {
+        setUserRole('guest');
+        setIsLoggedIn(false);
+        localStorage.removeItem('userRole');
+        localStorage.removeItem('studentName');
+        localStorage.removeItem('studentId');
+        localStorage.removeItem('adminLoggedIn');
+      };
+
+      const addTopic = () => {
+        if (!newTopic.mentor || !newTopic.title || !newTopic.direction) {
+          setMessageType('message');
+          setMessage('请填写导师、课题题目和方向');
+          return;
+        }
+
+        const newTopicWithId = {
+          ...newTopic,
+          id: Date.now(),
+          students: [],
+        };
+
+        const updatedTopics = [...topics, newTopicWithId];
+        setTopics(updatedTopics);
+        localStorage.setItem('topics', JSON.stringify(updatedTopics));
+        setNewTopic({ mentor: '', title: '', direction: '', limit: 1 });
+        setMessageType('message');
+        setMessage('✅ 课题已添加');
+      };
+
+      const removeTopic = (id) => {
+        const updatedTopics = topics.filter((t) => t.id !== id);
+        setTopics(updatedTopics);
+        localStorage.setItem('topics', JSON.stringify(updatedTopics));
+        setMessageType('message');
+        setMessage('✅ 课题已删除');
+      };
+
+      const exportResults = () => {
+        let csvContent =
+          '导师,课题题目,方向,学生姓名,学号\n' +
+          topics
+            .flatMap((topic) =>
+              topic.students.map((student) =>
+                [topic.mentor, topic.title, topic.direction, student.name, student.id].join(',')
+              )
+            )
+            .join('\n');
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', '学生选题结果.csv');
+        link.click();
+      };
+
+      const downloadTemplate = () => {
+        let templateContent = '导师,课题题目,研究方向,人数上限\n,,,\n';
+        const blob = new Blob([templateContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.setAttribute('href', url);
+        link.setAttribute('download', '课题模板.csv');
+        link.click();
+      };
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+
+        reader.onload = (event) => {
+          let text = event.target.result;
+
+          // 去掉 BOM 头（防止中文乱码）
+          if (text.charCodeAt(0) === 0xfeff) {
+            text = text.slice(1);
+          }
+
+          const rows = text.split('\n').slice(1); // 跳过表头
+          let newTopics = [];
+
+          let successCount = 0;
+          let errorCount = 0;
+
+          rows.forEach((row, index) => {
+            const [mentor, title, direction, limitStr] = row.split(',').map(cell => cell.trim());
+
+            if (!mentor || !title || !direction || !limitStr) {
+              console.warn(`第 ${index + 2} 行数据不完整：`, row);
+              errorCount++;
+              return;
+            }
+
+            const limit = parseInt(limitStr, 10);
+            if (isNaN(limit) || limit <= 0) {
+              console.warn(`第 ${index + 2} 行：人数上限必须为正整数`);
+              errorCount++;
+              return;
+            }
+
+            newTopics.push({
+              id: Date.now() + Math.random(), // 唯一 ID
+              mentor,
+              title,
+              direction,
+              limit,
+              students: [],
+            });
+
+            successCount++;
+          });
+
+          const updatedTopics = [...topics, ...newTopics];
+          setTopics(updatedTopics);
+          localStorage.setItem('topics', JSON.stringify(updatedTopics));
+
+          if (successCount > 0 && errorCount === 0) {
+            setMessageType('message');
+            setMessage(`✅ 成功导入 ${successCount} 条课题信息`);
+          } else if (successCount > 0 && errorCount > 0) {
+            setMessageType('message');
+            setMessage(`⚠️ 部分导入成功：成功 ${successCount} 条，失败 ${errorCount} 条`);
+          } else {
+            setMessage(`❌ 批量导入失败，请检查文件格式和内容`);
+            setMessageType('message');
+          }
+        };
+
+        reader.onerror = () => {
+          setMessageType('message');
+          setMessage('❌ 文件读取失败');
+        };
+
+        reader.readAsText(file, 'UTF-8');
+      };
+
+      const handleClearAllStudents = () => {
+        if (window.confirm('确定要清除所有学生选题记录吗？')) {
+          const clearedTopics = topics.map(topic => ({
+            ...topic,
+            students: [],
+          }));
+          setTopics(clearedTopics);
+          localStorage.setItem('topics', JSON.stringify(clearedTopics));
+          setMessageType('message');
+          setMessage('✅ 所有学生选题记录已清除');
+        }
+      };
+
+      const handleClearAllTopics = () => {
+        if (window.confirm('确定要删除所有课题信息吗？此操作不可恢复')) {
+          setTopics([]);
+          localStorage.setItem('topics', JSON.stringify([]));
+          setMessageType('message');
+          setMessage('✅ 所有课题信息已删除');
+
+          setTimeout(() => window.location.reload(), 500);
+        }
+      };
+
+      const handleSubmitChoice = () => {
+        const studentName = localStorage.getItem('studentName');
+        const studentId = localStorage.getItem('studentId');
+
+        if (!selectedTopicId) {
+          setMessageType('message');
+          setMessage('请选择一个课题');
+          return;
+        }
+
+        const selectedTopic = topics.find(t => t.id === selectedTopicId);
+
+        const hasSelectedOther = topics.some(topic =>
+          topic.students.some(s => s.id === studentId)
+        );
+
+        if (hasSelectedOther) {
+          setMessageType('message');
+          setMessage('您已选择课题，如需修改请联系管理员');
+          return;
+        }
+
+        if (selectedTopic.students.length >= selectedTopic.limit) {
+          setMessageType('message');
+          setMessage('该课题人数已满，请选择其他课题');
+          return;
+        }
+
+        if (
+          selectedTopic.students.some(
+            (s) => s.id === studentId && s.name === studentName
+          )
+        ) {
+          setMessageType('message');
+          setMessage('您已选择该课题');
+          return;
+        }
+
+        const updatedTopics = topics.map((topic) =>
+          topic.id === selectedTopicId
+            ? {
+                ...topic,
+                students: [...topic.students, { name: studentName, id: studentId }],
+              }
+            : topic
+        );
+
+        localStorage.setItem('topics', JSON.stringify(updatedTopics));
+        setMessageType('success');
+        setMessage('✅ 您的选题已提交');
+        setShowModal(true);
+      };
+
+      const handleSelectTopic = (id) => {
+        setSelectedTopicId(id);
+      };
+
+      const handleStudentLogin = () => {
+        const name = document.getElementById('studentName').value;
+        const id = document.getElementById('studentId').value;
+
+        if (!name.trim()) {
+          alert('请输入姓名');
+          return;
+        }
+
+        if (!/^\d+$/.test(id)) {
+          alert('学号必须为数字');
+          return;
+        }
+
+        localStorage.setItem('userRole', 'student');
+        localStorage.setItem('studentName', name);
+        localStorage.setItem('studentId', id);
+        setIsLoggedIn(true);
+        setUserRole('student');
+      };
+
+      const handleAdminLogin = () => {
+        const username = document.getElementById('adminUsername').value;
+        const password = document.getElementById('adminPassword').value;
+
+        if (username === 'cqut' && password === 'cqut654321') {
+          localStorage.setItem('userRole', 'admin');
+          localStorage.setItem('adminLoggedIn', 'true');
+          setUserRole('admin');
+        } else {
+          alert('账号或密码错误');
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-50 font-sans">
+          {/* Header */}
+          <header className="bg-gradient-to-r from-blue-600 to-blue-800 text-white shadow-lg">
+            <div className="container mx-auto px-4 py-3 flex flex-wrap justify-between items-center">
+              <div className="flex items-center space-x-2 mb-2 md:mb-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path fillRule="evenodd" d="M17 6a3 3 0 11-6 0 3 3 0 016 0zM6 11a3 3 0 11-6 0 3 3 0 016 0zm12 0a3 3 0 11-6 0 3 3 0 016 0z" clipRule="evenodd" />
+                </svg>
+                <h1 className="text-xl font-bold">材料科学与工程系选题系统</h1>
+              </div>
+              <div className="flex items-center">
+                {userRole === 'student' && (
+                  <div className="text-sm mr-4">
+                    当前用户：{localStorage.getItem('studentName')}（{localStorage.getItem('studentId')}）
+                  </div>
+                )}
+                {userRole === 'admin' && (
+                  <div className="text-sm mr-4">当前用户：管理员</div>
+                )}
+                {userRole !== 'guest' && (
+                  <button
+                    onClick={handleLogout}
+                    className="text-white hover:text-red-200 transition-colors"
+                  >
+                    登出
+                  </button>
+                )}
+              </div>
+            </div>
+          </header>
+
+          {/* Main Content */}
+          <main className="container mx-auto px-4 py-6">
+            {userRole === 'guest' && (
+              <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-lg shadow-md">
+                <h2 className="text-2xl font-bold mb-4 text-center">欢迎使用重庆理工大学选题系统</h2>
+                <p className="text-gray-600 mb-6 text-center">请选择您的身份以继续：</p>
+                <div className="grid grid-cols-1 gap-4">
+                  <button
+                    onClick={() => setUserRole('student-login')}
+                    className="bg-blue-600 hover:bg-blue-700 text-white py-3 px-6 rounded-lg transition flex items-center justify-center"
+                  >
+                    <i className="fas fa-user mr-2"></i> 学生登录
+                  </button>
+                  <button
+                    onClick={() => setUserRole('admin-login')}
+                    className="bg-purple-600 hover:bg-purple-700 text-white py-3 px-6 rounded-lg transition flex items-center justify-center"
+                  >
+                    <i className="fas fa-cog mr-2"></i> 管理员登录
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {userRole === 'student-login' && (
+              <div className="max-w-md mx-auto mt-8 p-6 bg-white rounded-lg shadow-md">
+                <h2 className="text-2xl font-bold mb-4 text-center">学生登录</h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">姓名</label>
+                    <input
+                      id="studentName"
+                      type="text"
+                      placeholder="请输入姓名"
+                      className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">学号</label>
+                    <input
+                      id="studentId"
+                      type="text"
+                      placeholder="请输入学号（数字）"
+                      className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <button
+                    onClick={handleStudentLogin}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 px-4 rounded transition"
+                  >
+                    登录
+                  </button>
+                  <button
+                    onClick={() => setUserRole('guest')}
+                    className="w-full text-gray-600 hover:text-gray-800 py-2"
+                  >
+                    返回上一级
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {userRole === 'admin-login' && (
+              <div className="max-w-md mx-auto mt-8 p-6 bg-white rounded-lg shadow-md">
+                <h2 className="text-2xl font-bold mb-4 text-center">管理员登录</h2>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">账号</label>
+                    <input
+                      id="adminUsername"
+                      type="text"
+                      placeholder="请输入账号"
+                      className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
+                    <input
+                      id="adminPassword"
+                      type="password"
+                      placeholder="请输入密码"
+                      className="w-full px-4 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <button
+                    onClick={handleAdminLogin}
+                    className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 px-4 rounded transition"
+                  >
+                    登录
+                  </button>
+                  <button
+                    onClick={() => setUserRole('guest')}
+                    className="w-full text-gray-600 hover:text-gray-800 py-2"
+                  >
+                    返回上一级
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {userRole === 'student' && (
+              <div className="p-4">
+                <h2 className="text-2xl font-bold mb-4">请选择课题</h2>
+                {topics.length === 0 ? (
+                  <p className="text-gray-600">暂无可用课题</p>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {topics.map((topic) => (
+                      <div
+                        key={topic.id}
+                        onClick={() => handleSelectTopic(topic.id)}
+                        className={`border rounded-lg p-4 cursor-pointer transition-all ${
+                          selectedTopicId === topic.id
+                            ? 'bg-blue-100 border-blue-500'
+                            : 'hover:bg-gray-100'
+                        }`}
+                      >
+                        <h3 className="font-semibold text-lg">{topic.mentor}</h3>
+                        <p className="font-medium mt-2">{topic.title}</p>
+                        <div className="mt-2 text-sm text-gray-600">
+                          <p>方向：{topic.direction}</p>
+                          <p>剩余名额：{topic.limit - topic.students.length} / {topic.limit}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-6 flex justify-between items-center">
+                  <button
+                    onClick={handleSubmitChoice}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded transition"
+                  >
+                    提交选择
+                  </button>
+                  <button
+                    onClick={handleLogout}
+                    className="text-red-600 hover:text-red-800"
+                  >
+                    登出
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {userRole === 'admin' && (
+              <div className="p-4">
+                <h2 className="text-2xl font-bold mb-4">管理员界面</h2>
+
+                {/* 新增课题表单（独立组件） */}
+                <div className="mb-6 bg-white p-4 rounded-lg shadow-md">
+                  <h3 className="text-lg font-semibold mb-2">新增课题</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <input
+                      type="text"
+                      placeholder="导师"
+                      value={newTopic.mentor}
+                      onChange={(e) => setNewTopic({ ...newTopic, mentor: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                    <input
+                      type="text"
+                      placeholder="课题题目"
+                      value={newTopic.title}
+                      onChange={(e) => setNewTopic({ ...newTopic, title: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                    <input
+                      type="text"
+                      placeholder="研究方向"
+                      value={newTopic.direction}
+                      onChange={(e) => setNewTopic({ ...newTopic, direction: e.target.value })}
+                      className="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="人数上限"
+                      value={newTopic.limit}
+                      onChange={(e) => setNewTopic({ ...newTopic, limit: parseInt(e.target.value, 10) || 1 })}
+                      className="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+                    />
+                  </div>
+                  <button
+                    onClick={addTopic}
+                    className="mt-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded transition"
+                  >
+                    添加课题
+                  </button>
+                </div>
+
+                {/* 操作按钮 */}
+                <div className="mb-6 flex flex-wrap gap-3">
+                  <button
+                    onClick={exportResults}
+                    className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded flex items-center"
+                  >
+                    <i className="fa fa-download mr-2"></i>导出学生选题结果
+                  </button>
+                  <button
+                    onClick={downloadTemplate}
+                    className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded flex items-center"
+                  >
+                    <i className="fa fa-file-text-o mr-2"></i>下载课题模板
+                  </button>
+                  <label className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded cursor-pointer inline-flex items-center">
+                    <i className="fa fa-upload mr-2"></i>批量上传课题
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  <button
+                    onClick={handleClearAllStudents}
+                    className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded flex items-center"
+                  >
+                    <i className="fa fa-trash mr-2"></i>清除学生选题
+                  </button>
+                  <button
+                    onClick={handleClearAllTopics}
+                    className="bg-red-700 hover:bg-red-800 text-white px-4 py-2 rounded flex items-center"
+                  >
+                    <i className="fa fa-exclamation-triangle mr-2"></i>删除所有课题
+                  </button>
+                </div>
+
+                {/* 课题表格 */}
+                <div className="overflow-x-auto bg-white rounded-lg shadow-md">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                          操作
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                          导师
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                          课题题目
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                          研究方向
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                          剩余名额
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                          已选学生
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {topics.length === 0 ? (
+                        <tr>
+                          <td colSpan="6" className="text-center py-8 text-gray-500">
+                            暂无课题
+                          </td>
+                        </tr>
+                      ) : (
+                        topics.map((topic) => (
+                          <tr key={topic.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-4 py-3 text-sm font-medium">
+                              <button
+                                onClick={() => {
+                                  if (window.confirm('确定要删除该课题吗？此操作不可恢复')) {
+                                    const updated = topics.filter(t => t.id !== topic.id);
+                                    setTopics(updated);
+                                    localStorage.setItem('topics', JSON.stringify(updated));
+                                    setMessage('✅ 课题已删除');
+                                  }
+                                }}
+                                className="text-red-600 hover:text-red-800"
+                              >
+                                删除
+                              </button>
+                            </td>
+                            <td className="px-4 py-3 text-sm">{topic.mentor}</td>
+                            <td className="px-4 py-3 text-sm">{topic.title}</td>
+                            <td className="px-4 py-3 text-sm">{topic.direction}</td>
+                            <td className="px-4 py-3 text-sm">
+                              {topic.limit - topic.students.length}/{topic.limit}
+                            </td>
+                            <td className="px-4 py-3 text-sm">
+                              {topic.students.length > 0 ? (
+                                <ul className="list-disc pl-5">
+                                  {topic.students.map((student, index) => (
+                                    <li key={index}>
+                                      {student.name}（{student.id}）
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                '暂无学生'
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* Footer */}
+          <footer className="bg-gray-100 py-4 mt-8">
+            <div className="container mx-auto px-4 text-center text-gray-600 text-sm">
+              <p>© 2025 重庆理工大学 材料科学与工程学院 材料科学与工程系</p>
+            </div>
+          </footer>
+
+          {/* Message Modal */}
+          {message && messageType === 'message' && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white p-6 rounded-lg shadow-lg max-w-md mx-auto">
+                <h3 className="text-lg font-semibold mb-4">提示信息</h3>
+                <p className="mb-6">{message}</p>
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => {
+                      setMessage('');
+                      setMessageType('');
+                    }}
+                    className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                  >
+                    确定
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Success Modal */}
+          {showModal && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white p-6 rounded-lg shadow-lg max-w-md mx-auto">
+                <h3 className="text-lg font-semibold mb-4">提交成功</h3>
+                <p className="mb-6">您的选题已成功提交！</p>
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => setShowModal(false)}
+                    className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                  >
+                    关闭
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // 渲染 App 组件到 #root
+    const rootElement = document.getElementById('root');
+    ReactDOM.render(<App />, rootElement);
+  </script>
+</body>
+</html>
